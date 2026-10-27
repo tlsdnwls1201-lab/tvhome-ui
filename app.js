@@ -417,7 +417,7 @@
       '요일 ' + now.getHours() + '시 ' + now.getMinutes() + '분)\n';
     if (/뉴스|소식|이슈|요즘|최근|오늘|어제|속보/.test(q)) {
       try {
-        const hs = await headlines(15);
+        const hs = await headlines(NEWS_FEEDS[0].url, 15);
         s += '방금 가져온 실제 뉴스 헤드라인:\n' + hs.map((x) => '- ' + x).join('\n') + '\n뉴스 이야기는 이 헤드라인에 있는 내용만 근거로 답해.\n';
       } catch (e) { /* 헤드라인 없이 묻는다 */ }
     }
@@ -620,7 +620,14 @@
       weather.hi + '도, 최저 ' + weather.lo + '도, 비 올 확률은 ' + weather.rain + '퍼센트예요.\n\n';
     const todos = todayReminders();
     if (todos.length) text += '오늘 할 일은 ' + todos.map((r) => (r.time ? spokenTime(r.time) + ' ' : '') + r.text).join(', ') + '입니다.\n\n';
-    return text + await newsBriefing();
+    text += await newsBriefing();
+    try {
+      if (TV.report && localStorage.getItem('reportedBrief') !== window.UI_VERSION) {
+        localStorage.setItem('reportedBrief', window.UI_VERSION);
+        report({ kind: 'briefing', text });
+      }
+    } catch (e) { /* 무시 */ }
+    return text;
   }
   async function startBriefing() {
     TV.stopSpeak();
@@ -637,22 +644,35 @@
     const [hh, mm] = t.split(':').map(Number);
     return (hh < 12 ? '오전 ' : '오후 ') + ((hh % 12) || 12) + '시' + (mm ? ' ' + mm + '분' : '');
   }
+  /** 브리핑 뉴스 분야: 구글 뉴스(한국어)의 실제 헤드라인. n은 고를 소식 수. */
+  const NEWS_FEEDS = [
+    { name: '주요 뉴스', n: 3, url: 'https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko' },
+    { name: '일본 소식', n: 2, q: '일본 when:1d' },
+    { name: '세계 경제 소식', n: 2, q: '(뉴욕증시 OR 연준 OR 국제유가 OR 달러 OR 세계 경제 OR 미국 경제 OR 중국 경제) when:1d' },
+    { name: 'AI 기술 소식', n: 2, q: '(오픈AI OR 앤트로픽 OR 제미나이 OR 엔비디아 OR 생성형 AI OR AI 모델 OR 빅테크 AI) when:1d' },
+  ];
+  const gnews = (q) => 'https://news.google.com/rss/search?q=' + encodeURIComponent(q) + '&hl=ko&gl=KR&ceid=KR:ko';
+  const MOTTO = '오늘의 한마디입니다. 완벽하지 않아도 괜찮아요. 오늘 할 수 있는 한 걸음이면 충분합니다.';
   async function newsBriefing() {
-    let hs;
-    try { hs = await headlines(12); } catch (e) { return '뉴스를 가져오지 못했어요.'; }
-    if (!hs.length) return '지금은 뉴스를 가져오지 못했어요.';
+    const got = await Promise.all(NEWS_FEEDS.map((f) => headlines(f.url || gnews(f.q), 10).catch(() => [])));
+    const secs = NEWS_FEEDS.map((f, i) => Object.assign({ hs: got[i] }, f)).filter((x) => x.hs.length);
+    if (!secs.length) return '지금은 뉴스를 가져오지 못했어요.\n\n' + MOTTO;
     try {
-      return await call('ask', PERSONA, '아래는 방금 가져온 실제 뉴스 헤드라인이야.\n' + hs.map((x) => '- ' + x).join('\n') +
-        '\n이 중 중요한 3가지를 골라 \'첫 번째 소식\', \'두 번째 소식\', \'세 번째 소식\'으로 각각 한두 문장씩 쉽게 소개해. ' +
+      const text = await call('ask', PERSONA, '아래는 방금 가져온 실제 뉴스 헤드라인이야. 분야별로 나눠 두었어.\n\n' +
+        secs.map((x) => '[' + x.name + '] ' + x.n + '가지\n' + x.hs.map((t) => '- ' + t).join('\n')).join('\n\n') +
+        '\n\n아침 브리핑으로 소리 내어 읽을 글을 써 줘. 분야마다 "' + secs[0].name + '입니다."처럼 분야 이름으로 시작하고, ' +
+        '적힌 개수만큼 중요한 소식을 골라 \'첫 번째 소식\', \'두 번째 소식\'처럼 한두 문장씩 쉽게 소개해. 여러 분야에 같은 소식이 있으면 한 번만 말해. ' +
         '헤드라인에 없는 사실·숫자·배경은 절대 지어내지 말고, 헤드라인 내용만 풀어서 말해. ' +
-        '마지막에 하루를 시작하는 짧은 한마디를 덧붙여. 인사말과 날짜는 빼고, 목록 기호 없이 소리 내어 읽기 좋은 문장으로.');
+        '맨 끝에는 "오늘의 한마디입니다."로 시작하는 짧은 동기부여 한마디를 한두 문장으로 덧붙여. ' +
+        '인사말과 날짜는 빼고, 목록 기호 없이, 분야 사이는 빈 줄로 나눠.');
+      return /오늘의 한마디/.test(text) ? text : text + '\n\n' + MOTTO;
     } catch (e) {
-      return '오늘의 주요 뉴스입니다.\n' + hs.slice(0, 3).join('.\n') + '.';
+      return secs.map((x) => x.name + '입니다.\n' + x.hs.slice(0, x.n).join('.\n') + '.').join('\n\n') + '\n\n' + MOTTO;
     }
   }
-  /** 구글 뉴스 한국판 RSS의 실제 헤드라인 (언론사 이름·머리표 제거). */
-  async function headlines(n) {
-    const xml = await call('httpGet', 'https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko');
+  /** 구글 뉴스 RSS의 실제 헤드라인 (언론사 이름·머리표 제거). */
+  async function headlines(url, n) {
+    const xml = await call('httpGet', url);
     const doc = new DOMParser().parseFromString(xml, 'text/xml');
     return [...doc.querySelectorAll('item > title')].slice(0, n).map((t) =>
       t.textContent.replace(/\s-\s[^-]+$/, '').replace(/^\[[^\]]*\]\s*/, '').trim()).filter(Boolean);
@@ -767,7 +787,7 @@
       genieHome: () => toast('(미리보기) 지니TV'), speak: () => {}, stopSpeak: () => {}, toast: (m) => toast(m),
       reload: () => location.reload(), exit: () => {}, stopAlarmSound: () => {},
       listen: (id) => cb(id, true, '오늘 저녁 메뉴 추천해 줘', 900),
-      ask: (id) => cb(id, true, '쌀쌀한 저녁엔 따뜻한 국물 요리가 좋아요. 된장찌개나 김치찌개 어떠세요?', 1200),
+      ask: (id, ins, prompt) => { window.__lastAsk = prompt; cb(id, true, '쌀쌀한 저녁엔 따뜻한 국물 요리가 좋아요. 된장찌개나 김치찌개 어떠세요?', 1200); },
       httpGet: (id) => cb(id, true, '<rss><channel><item><title>미리보기 헤드라인 하나 - 언론사</title></item><item><title>미리보기 헤드라인 둘 - 언론사</title></item></channel></rss>'),
       getData: () => JSON.stringify({ alarm: { song: { title: 'IU - 아침 (미리보기)', url: 'https://youtu.be/dQw4w9WgXcQ' },
         days: { mon: { on: true, time: '07:00' }, tue: { on: true, time: '07:30' }, wed: { on: true, time: '07:00' }, thu: { on: true, time: '07:00' },
