@@ -484,14 +484,17 @@
       setTimeout(() => reject(new Error('timeout')), 8000);
     });
   }
+  const DEBUG = /debug/.test(location.search) || localStorage.getItem('tvdebug') === '1';
+  function dbg(m) { if (DEBUG && TV.toast) TV.toast('[유튜브] ' + m); }
   function playSong(id) {
     loadYT().then((YT) => {
       if (!ringing) return;
       ytPlayer = new YT.Player('yt', { videoId: id, width: 216, height: 122,
         playerVars: { autoplay: 1, controls: 0, loop: 1, playlist: id, rel: 0, modestbranding: 1, playsinline: 1 },
         events: {
-          onReady: (e) => { e.target.unMute(); e.target.setVolume(100); e.target.playVideo(); },
-          onError: () => songInYouTubeApp(),
+          onReady: (e) => { dbg('준비됨'); e.target.unMute(); e.target.setVolume(100); e.target.playVideo(); },
+          onStateChange: (e) => dbg('상태 ' + e.data),
+          onError: (e) => { dbg('오류 ' + e.data); songInYouTubeApp(); },
         } });
       clearTimeout(ytCheck);
       ytCheck = setTimeout(() => {
