@@ -460,6 +460,7 @@
     document.getElementById('b-status').innerHTML = 'WAKE UP' + WAVE;
     document.getElementById('b-body').textContent = '좋은 아침이에요! 아무 버튼이나 누르면 노래가 멈추고 브리핑을 시작해요.';
     const song = songFor(dayCfg(new Date())), id = ytId(song.url);
+    songUrl = song.url || ''; songInApp = false;
     if (id) {
       nowPlaying.innerHTML = '<div id="yt"></div>' +
         '<div class="np"><div class="label">Now playing</div><div class="np-title">' + esc(song.title || '오늘의 노래') + '</div>' + WAVE + '</div>';
@@ -473,7 +474,7 @@
     ringTimer = setTimeout(() => { if (ringing) stopRing(); }, 15 * 60000);
   }
   /** 유튜브 공식 플레이어로 틀고, 8초 안에 재생이 안 되면(삭제·임베드 금지·지난 라이브 등) 기본 알람음으로 바꾼다. */
-  let ytPlayer = null, ytCheck = null;
+  let ytPlayer = null, ytCheck = null, songInApp = false, songUrl = '';
   function loadYT() {
     return new Promise((resolve, reject) => {
       if (window.YT && window.YT.Player) return resolve(window.YT);
@@ -490,13 +491,28 @@
         playerVars: { autoplay: 1, controls: 0, loop: 1, playlist: id, rel: 0, modestbranding: 1, playsinline: 1 },
         events: {
           onReady: (e) => { e.target.unMute(); e.target.setVolume(100); e.target.playVideo(); },
-          onError: () => fallbackChime('노래를 재생할 수 없어 기본 알람음으로 깨워요'),
+          onError: () => songInYouTubeApp(),
         } });
       clearTimeout(ytCheck);
       ytCheck = setTimeout(() => {
-        if (ringing && (!ytPlayer || !ytPlayer.getPlayerState || ytPlayer.getPlayerState() !== 1)) fallbackChime('노래를 재생할 수 없어 기본 알람음으로 깨워요');
+        if (ringing && (!ytPlayer || !ytPlayer.getPlayerState || ytPlayer.getPlayerState() !== 1)) songInYouTubeApp();
       }, 8000);
-    }).catch(() => fallbackChime('노래를 불러오지 못해 기본 알람음으로 깨워요'));
+    }).catch(() => songInYouTubeApp());
+  }
+  /** 웹 플레이어가 막히면 TV의 유튜브 앱으로 튼다. '이전'으로 돌아오면 브리핑을 시작한다. */
+  function songInYouTubeApp() {
+    if (!ringing || songInApp || chime) return;
+    clearTimeout(ytCheck);
+    if (ytPlayer && ytPlayer.destroy) { try { ytPlayer.destroy(); } catch (e) { /* 무시 */ } }
+    ytPlayer = null;
+    const url = 'https://www.youtube.com/watch?v=' + ytId(songUrl);
+    if (TV.openUrl && TV.openUrl(url)) {
+      songInApp = true;
+      nowPlaying.innerHTML = '<div class="np" style="left:24px"><div class="label">Now playing · YouTube</div>' +
+        '<div class="np-title">유튜브 앱에서 노래를 틀었어요</div><div class="label" style="letter-spacing:.12em">리모컨 [이전]을 누르면 브리핑을 시작해요</div></div>';
+    } else {
+      fallbackChime('노래를 재생할 수 없어 기본 알람음으로 깨워요');
+    }
   }
   function fallbackChime(msg) {
     if (!ringing || chime) return;
@@ -507,7 +523,7 @@
   }
 
   function stopRing() {
-    ringing = false; clearTimeout(ringTimer); clearTimeout(ytCheck);
+    ringing = false; songInApp = false; clearTimeout(ringTimer); clearTimeout(ytCheck);
     if (ytPlayer && ytPlayer.destroy) { try { ytPlayer.destroy(); } catch (e) { /* 무시 */ } }
     ytPlayer = null;
     nowPlaying.classList.remove('on'); nowPlaying.innerHTML = ''; bPanel.style.bottom = '';
@@ -627,7 +643,10 @@
     if (ev && ev.type === 'reminder') return true; // 할 일은 아침 브리핑에서만 알린다
     return false;
   };
-  window.onTvResume = function () { loadWeather(); loadData(); syncData(); checkVersion(); };
+  window.onTvResume = function () {
+    if (ringing && songInApp) { stopRing(); return; } // 유튜브 앱에서 [이전]으로 돌아옴 → 브리핑
+    loadWeather(); loadData(); syncData(); checkVersion();
+  };
 
   // 새 화면이 올라오면 다시 불러온다
   async function checkVersion() {
