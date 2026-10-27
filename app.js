@@ -660,6 +660,8 @@
   }
 
   show('home', firstChannel);
+  // 앱이 알람(또는 클라우드 링크)으로 처음 켜졌다면 기다리던 알람을 받아 온다
+  try { const pe = TV.takeEvent && TV.takeEvent(); if (pe) setTimeout(() => window.onTvEvent(JSON.parse(pe)), 300); } catch (e) { /* 무시 */ }
   tick(); setInterval(tick, 10000);
   loadWeather(); setInterval(loadWeather, 30 * 60000);
   loadData(); syncData(); setInterval(() => { refreshAlarm(); renderToday(); }, 60000); setInterval(syncData, 10 * 60000);
