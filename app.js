@@ -226,8 +226,8 @@
     if (!firstChannel) firstChannel = p;
     live.appendChild(p);
   });
-  live.appendChild(h('div', { class: 'label', style: { position: 'absolute', left: '18px', bottom: '18px', letterSpacing: '.12em' } },
-    '리모컨 숫자로도 바로 이동'));
+  live.appendChild(h('div', { class: 'label', style: { position: 'absolute', left: '18px', top: '184px' } }, 'Today · 할 일'));
+  live.appendChild(h('div', { id: 'today', style: { position: 'absolute', left: '18px', right: '14px', top: '204px' } }));
   home.appendChild(live);
 
   // AI
@@ -319,13 +319,53 @@
     if (c <= 86) return '눈 소나기'; return '뇌우';
   }
 
-  const DAYS = ['월', '화', '수', '목', '금', '토', '일'];
-  function alarmState() { try { return JSON.parse(TV.getAlarm()); } catch (e) { return { on: false, hour: 7, minute: 0, days: 31, next: -1 }; } }
+  // ---------- 폰에서 정한 데이터 (요일별 알람·노래·할 일) ----------
+  const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  const KDAY = '일월화수목금토';
+  let DATA = {};
+  function loadData() {
+    try { DATA = JSON.parse((TV.getData && TV.getData()) || '{}'); } catch (e) { DATA = {}; }
+    refreshAlarm(); renderToday();
+  }
+  function syncData() { if (TV.syncNow) call('syncNow').then(loadData).catch(() => {}); }
+  const ymd = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  const dayCfg = (d) => ((DATA.alarm || {}).days || {})[DAY_KEYS[d.getDay()]] || {};
+  const songFor = (cfg) => (cfg && cfg.song && cfg.song.url) ? cfg.song : ((DATA.alarm || {}).song || {});
+  function nextAlarm() {
+    const now = new Date();
+    for (let i = 0; i < 8; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i), c = dayCfg(d);
+      if (!c.on || !/^\d{1,2}:\d{2}$/.test(c.time || '')) continue;
+      const [hh, mm] = c.time.split(':').map(Number);
+      d.setHours(hh, mm, 0, 0);
+      if (d > now) return { at: d, cfg: c };
+    }
+    return null;
+  }
+  function todayReminders() {
+    const t = ymd(new Date());
+    return (DATA.reminders || []).filter((r) => r.date === t && !r.done).sort((a, b) => (a.time || '99').localeCompare(b.time || '99'));
+  }
   function refreshAlarm() {
-    const a = alarmState();
-    if (!a.on || a.next < 0) return aRing.set(0, 'OFF', '알람 꺼짐');
-    const left = (a.next - Date.now()) / 86400000, n = new Date(a.next);
-    aRing.set(1 - Math.min(1, left), pad(n.getHours()) + ':' + pad(n.getMinutes()), '일월화수목금토'[n.getDay()] + '요일');
+    const n = nextAlarm();
+    if (!n) return aRing.set(0, 'OFF', '알람 꺼짐');
+    const left = (n.at - Date.now()) / 86400000;
+    aRing.set(1 - Math.min(1, left), pad(n.at.getHours()) + ':' + pad(n.at.getMinutes()), KDAY[n.at.getDay()] + '요일');
+  }
+  function renderToday() {
+    const el = document.getElementById('today');
+    if (!el) return;
+    const list = todayReminders();
+    el.innerHTML = list.length
+      ? list.slice(0, 2).map((r) => '<div class="todo"><b>' + (r.time || '하루') + '</b>' + esc(r.text) + '</div>').join('') +
+        (list.length > 2 ? '<div class="todo more">+' + (list.length - 2) + '개 더</div>' : '')
+      : '<div class="todo none">오늘 할 일이 없어요</div>';
+  }
+  const esc = (t) => String(t || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  /** 유튜브·유튜브 뮤직 링크에서 영상 ID. */
+  function ytId(u) {
+    const m = String(u || '').match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([A-Za-z0-9_-]{11})/);
+    return m ? m[1] : null;
   }
 
   // ---------- 안내 화면 ----------
@@ -400,22 +440,61 @@
   brief.appendChild(h('div', { class: 'hint' }, '뒤로 · 홈으로'));
   let ringing = false;
 
+  const nowPlaying = h('div', { class: 'card nowplaying' });
+  brief.appendChild(nowPlaying);
+  let chime = null, ringTimer = null;
+
   function openBriefing(alarm) {
     const now = new Date();
-    document.getElementById('b-date').textContent = (now.getMonth() + 1) + '월 ' + now.getDate() + '일 ' + '일월화수목금토'[now.getDay()] + '요일';
+    document.getElementById('b-date').textContent = (now.getMonth() + 1) + '월 ' + now.getDate() + '일 ' + KDAY[now.getDay()] + '요일';
     bClock.set((now.getHours() * 60 + now.getMinutes()) / 1440, pad(now.getHours()) + ':' + pad(now.getMinutes()), 'GOOD MORNING');
     show('brief', bOk);
-    if (alarm) {
-      ringing = true;
-      document.getElementById('b-tag').textContent = 'ALARM';
-      document.getElementById('b-status').innerHTML = 'WAKE UP' + WAVE;
-      document.getElementById('b-body').textContent = '좋은 아침이에요! 아무 버튼이나 누르면 브리핑을 시작해요.';
-      setTimeout(() => { if (ringing) stopRing(); }, 60000);
-    } else {
-      startBriefing();
-    }
+    if (alarm) wakeWithSong(); else startBriefing();
   }
-  function stopRing() { ringing = false; TV.stopAlarmSound(); startBriefing(); }
+
+  /** 알람: 오늘 요일의 노래(없으면 기본 노래)를 틀고, 아무 버튼이나 누르면 브리핑. */
+  function wakeWithSong() {
+    ringing = true;
+    TV.stopSpeak();
+    document.getElementById('b-tag').textContent = 'ALARM';
+    document.getElementById('b-status').innerHTML = 'WAKE UP' + WAVE;
+    document.getElementById('b-body').textContent = '좋은 아침이에요! 아무 버튼이나 누르면 노래가 멈추고 브리핑을 시작해요.';
+    const song = songFor(dayCfg(new Date())), id = ytId(song.url);
+    if (id) {
+      nowPlaying.innerHTML = '<iframe allow="autoplay; encrypted-media" frameborder="0" src="https://www.youtube.com/embed/' + id +
+        '?autoplay=1&loop=1&playlist=' + id + '&controls=0&modestbranding=1&rel=0&playsinline=1"></iframe>' +
+        '<div class="np"><div class="label">Now playing</div><div class="np-title">' + esc(song.title || '오늘의 노래') + '</div>' + WAVE + '</div>';
+    } else {
+      nowPlaying.innerHTML = '<div class="np" style="left:24px"><div class="label">Alarm</div><div class="np-title">기본 알람음</div>' + WAVE + '</div>';
+      chime = playChime();
+    }
+    nowPlaying.classList.add('on'); bPanel.style.bottom = '196px';
+    if (TV.alarmAck) TV.alarmAck(); // 웹이 소리를 맡았으니 기본 알람음은 쓰지 않는다
+    clearTimeout(ringTimer);
+    ringTimer = setTimeout(() => { if (ringing) stopRing(); }, 15 * 60000);
+  }
+  function stopRing() {
+    ringing = false; clearTimeout(ringTimer);
+    nowPlaying.classList.remove('on'); nowPlaying.innerHTML = ''; bPanel.style.bottom = '';
+    if (chime) { chime.stop(); chime = null; }
+    TV.stopAlarmSound(); if (TV.releaseWake) TV.releaseWake();
+    startBriefing();
+  }
+  /** 노래가 없을 때 부드러운 알람음 (WebAudio). */
+  function playChime() {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    let alive = true;
+    const notes = [523.25, 659.25, 783.99, 1046.5];
+    (function loop(i) {
+      if (!alive) return;
+      const o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime;
+      o.type = 'sine'; o.frequency.value = notes[i % 4];
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.25, t + .05); g.gain.exponentialRampToValueAtTime(.001, t + .9);
+      o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + 1);
+      setTimeout(() => loop(i + 1), i % 4 === 3 ? 1600 : 380);
+    })(0);
+    return { stop() { alive = false; ctx.close(); } };
+  }
 
   async function startBriefing() {
     TV.stopSpeak();
@@ -427,8 +506,14 @@
     if (!weather) await loadWeather();
     if (weather) text += CITY + ' 날씨는 지금 ' + weather.label + ', 기온 ' + weather.t + '도, 체감 ' + weather.feel + '도입니다. 오늘 최고 ' +
       weather.hi + '도, 최저 ' + weather.lo + '도, 비 올 확률은 ' + weather.rain + '퍼센트예요.\n\n';
+    const todos = todayReminders();
+    if (todos.length) text += '오늘 할 일은 ' + todos.map((r) => (r.time ? spokenTime(r.time) + ' ' : '') + r.text).join(', ') + '입니다.\n\n';
     text += await newsBriefing();
     st.textContent = 'TODAY'; body.textContent = text; TV.speak(text); followText(text);
+  }
+  function spokenTime(t) {
+    const [hh, mm] = t.split(':').map(Number);
+    return (hh < 12 ? '오전 ' : '오후 ') + ((hh % 12) || 12) + '시' + (mm ? ' ' + mm + '분' : '');
   }
   async function newsBriefing() {
     let hs;
@@ -451,46 +536,54 @@
       t.textContent.replace(/\s-\s[^-]+$/, '').replace(/^\[[^\]]*\]\s*/, '').trim()).filter(Boolean);
   }
 
-  // ---------- 알람 설정 ----------
+  // ---------- 알람·할 일 보기 (설정은 폰에서) ----------
   const al = screen('alarm');
-  al.appendChild(h('div', { class: 'page-title' }, '<small>MORNING ALARM</small>아침 알람'));
+  al.appendChild(h('div', { class: 'page-title' }, '<small>ALARM · SCHEDULE</small>알람과 할 일'));
   const alPanel = h('div', { class: 'card panel' });
   al.appendChild(alPanel);
-  al.appendChild(h('div', { class: 'hint' }, '시·분은 ▲▼로 바꿔요   ·   바꾸면 바로 저장돼요   ·   뒤로 · 홈으로'));
-  const alToggle = focusable(h('div', { class: 'pill', style: px(30, 26, 150, 44) }));
-  const alHour = focusable(h('div', { class: 'big-num', style: { left: '30px', top: '96px' } }));
-  const alMin = focusable(h('div', { class: 'big-num', style: { left: '176px', top: '96px' } }));
-  const colon = h('div', { style: { position: 'absolute', left: '153px', top: '112px', fontSize: '50px', fontWeight: 200 } }, ':');
-  const alNext = h('div', { class: 'status', style: { position: 'absolute', left: '330px', top: '134px' } });
-  alPanel.append(alToggle, alHour, colon, alMin, alNext);
-  const dayEls = DAYS.map((d, i) => {
-    const e = focusable(h('div', { class: 'day', style: { left: (30 + i * 62) + 'px', top: '236px' } }, d));
-    alPanel.appendChild(e);
-    return e;
-  });
-  let alarm = alarmState();
-  function renderAlarm() {
-    alToggle.textContent = alarm.on ? '알람 켜짐' : '알람 꺼짐';
-    alToggle.style.color = alarm.on ? 'var(--white)' : 'var(--sub)';
-    alHour.textContent = pad(alarm.hour); alMin.textContent = pad(alarm.minute);
-    dayEls.forEach((e, i) => e.classList.toggle('sel', !!(alarm.days & (1 << i))));
-    if (!alarm.on || alarm.next < 0) alNext.textContent = '알람이 울리지 않아요';
-    else { const n = new Date(alarm.next); alNext.textContent = 'NEXT  ' + (n.getMonth() + 1) + '/' + n.getDate() + ' (' + '일월화수목금토'[n.getDay()] + ') ' + pad(n.getHours()) + ':' + pad(n.getMinutes()); }
+  const alSync = focusable(h('div', { class: 'pill', style: px(800, 40, 120, 36), on: () => { alSync.textContent = '받는 중…'; call('syncNow').then(() => { loadData(); openAlarm(); toast('폰 설정을 받아 왔어요'); }).catch((e) => toast('받아 오기 실패: ' + e.message)).finally(() => { alSync.textContent = '지금 받기'; }); } }, '지금 받기'));
+  al.appendChild(alSync);
+  al.appendChild(h('div', { class: 'hint' }, '폰에서 설정 · tlsdnwls1201-lab.github.io/tvhome-ui/phone      뒤로 · 홈으로'));
+  function openAlarm() {
+    const today = new Date().getDay();
+    const order = [1, 2, 3, 4, 5, 6, 0];
+    const rows = order.map((d) => {
+      const c = ((DATA.alarm || {}).days || {})[DAY_KEYS[d]] || {}, song = c.song && c.song.title;
+      return '<div class="sched' + (d === today ? ' today' : '') + '"><span class="sd">' + KDAY[d] + '</span>' +
+        '<span class="st">' + (c.on ? c.time : '—') + '</span><span class="ss">' + (c.on ? esc(song || '') : '꺼짐') + '</span></div>';
+    }).join('');
+    const def = (DATA.alarm || {}).song || {};
+    const now = Date.now(), f = new Date();
+    const rems = (DATA.reminders || []).filter((r) => !r.done && new Date(r.date + 'T' + (r.time || '23:59')) >= new Date(f.getFullYear(), f.getMonth(), f.getDate()))
+      .sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || ''))).slice(0, 6);
+    alPanel.innerHTML =
+      '<div style="position:absolute;left:30px;top:24px;width:330px"><div class="label">Weekly alarm</div><div style="margin-top:10px">' + rows + '</div></div>' +
+      '<div style="position:absolute;left:400px;top:24px;right:30px"><div class="label">Default song</div>' +
+      '<div style="margin-top:8px;font-size:15px">' + esc(def.title || (def.url ? def.url : '설정 안 됨 · 기본 알람음')) + '</div>' +
+      '<div class="label" style="margin-top:26px">Upcoming · 할 일</div><div style="margin-top:8px">' +
+      (rems.length ? rems.map((r) => '<div class="todo"><b>' + r.date.slice(5).replace('-', '/') + ' ' + (r.time || '') + '</b>' + esc(r.text) + '</div>').join('')
+        : '<div class="todo none">예정된 할 일이 없어요</div>') + '</div></div>';
+    show('alarm', alSync);
   }
-  function saveAlarm() { alarm = JSON.parse(TV.setAlarm(JSON.stringify(alarm))); renderAlarm(); refreshAlarm(); }
-  alToggle.addEventListener('click', () => { alarm.on = !alarm.on; saveAlarm(); });
-  dayEls.forEach((e, i) => e.addEventListener('click', () => { alarm.days ^= (1 << i); saveAlarm(); }));
-  function openAlarm() { alarm = alarmState(); renderAlarm(); show('alarm', alToggle); }
+
+  /** 할 일 시각이 되면 TV에 띄우고 읽어 준다. */
+  const remOverlay = h('div', { class: 'card reminder' });
+  stage.appendChild(remOverlay);
+  let remTimer;
+  function showReminder(r) {
+    remOverlay.innerHTML = '<div class="label">Reminder · ' + esc(r.time || '') + '</div><div class="rem-text">' + esc(r.text) + '</div>' +
+      '<div class="label" style="margin-top:14px;letter-spacing:.14em">아무 버튼이나 누르면 닫혀요</div>';
+    remOverlay.classList.add('on');
+    TV.speak('알림이에요. ' + r.text);
+    clearTimeout(remTimer); remTimer = setTimeout(hideReminder, 90000);
+  }
+  function hideReminder() { remOverlay.classList.remove('on'); }
 
   // ---------- 리모컨 키 ----------
   addEventListener('keydown', (ev) => {
     const k = ev.key;
     if (current === 'brief' && ringing) { ev.preventDefault(); stopRing(); return; }
-    if (current === 'alarm' && (focused === alHour || focused === alMin) && (k === 'ArrowUp' || k === 'ArrowDown')) {
-      const d = k === 'ArrowUp' ? 1 : -1;
-      if (focused === alHour) alarm.hour = (alarm.hour + d + 24) % 24; else alarm.minute = (alarm.minute + d * 5 + 60) % 60;
-      ev.preventDefault(); saveAlarm(); return;
-    }
+    if (remOverlay.classList.contains('on')) { ev.preventDefault(); hideReminder(); TV.stopSpeak(); return; }
     const dir = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[k];
     if (dir) { ev.preventDefault(); move(dir); return; }
     if (k === 'Enter' || k === ' ') { ev.preventDefault(); if (focused) focused.click(); return; }
@@ -502,13 +595,18 @@
   window.onTvBack = function () {
     if (current === 'home') return false;
     TV.stopSpeak(); clearInterval(follow);
-    if (ringing) { ringing = false; TV.stopAlarmSound(); }
+    if (ringing) { stopRing(); return true; }
     show('home', firstChannel);
     return true;
   };
   window.onTvMic = function () { openAsk(true); };
-  window.onTvAlarm = function () { openBriefing(true); return true; };
-  window.onTvResume = function () { loadWeather(); refreshAlarm(); checkVersion(); };
+  window.onTvAlarm = function () { openBriefing(true); return true; };   // 예전 셸 호환
+  window.onTvEvent = function (ev) {
+    if (ev && ev.type === 'alarm') { loadData(); openBriefing(true); return true; }
+    if (ev && ev.type === 'reminder') { showReminder(ev); return true; }
+    return false;
+  };
+  window.onTvResume = function () { loadWeather(); loadData(); syncData(); checkVersion(); };
 
   // 새 화면이 올라오면 다시 불러온다
   async function checkVersion() {
@@ -521,7 +619,7 @@
   show('home', firstChannel);
   tick(); setInterval(tick, 10000);
   loadWeather(); setInterval(loadWeather, 30 * 60000);
-  refreshAlarm(); setInterval(refreshAlarm, 60000);
+  loadData(); syncData(); setInterval(() => { refreshAlarm(); renderToday(); }, 60000); setInterval(syncData, 10 * 60000);
   setInterval(checkVersion, 3 * 60000);
 
   // ---------- 브라우저 미리보기용 가짜 TV ----------
@@ -538,6 +636,11 @@
       listen: (id) => cb(id, true, '오늘 저녁 메뉴 추천해 줘', 900),
       ask: (id) => cb(id, true, '쌀쌀한 저녁엔 따뜻한 국물 요리가 좋아요. 된장찌개나 김치찌개 어떠세요?', 1200),
       httpGet: (id) => cb(id, true, '<rss><channel><item><title>미리보기 헤드라인 하나 - 언론사</title></item><item><title>미리보기 헤드라인 둘 - 언론사</title></item></channel></rss>'),
+      getData: () => JSON.stringify({ alarm: { song: { title: 'IU - 아침 (미리보기)', url: 'https://youtu.be/dQw4w9WgXcQ' },
+        days: { mon: { on: true, time: '07:00' }, tue: { on: true, time: '07:30' }, wed: { on: true, time: '07:00' }, thu: { on: true, time: '07:00' },
+          fri: { on: true, time: '07:00' }, sat: { on: false, time: '09:00' }, sun: { on: false, time: '09:00' } } },
+        reminders: [{ date: new Date().toISOString().slice(0, 10), time: '15:00', text: '병원 예약 (미리보기)' }] }),
+      syncNow: (id) => cb(id, true, '{}'), alarmAck: () => {}, releaseWake: () => {}, openUrl: () => true,
       getAlarm: () => JSON.stringify(Object.assign({}, alarmM, { next: alarmM.on ? next() : -1 })),
       setAlarm: (j) => { alarmM = Object.assign(alarmM, JSON.parse(j)); return JSON.stringify(Object.assign({}, alarmM, { next: alarmM.on ? next() : -1 })); },
     };
