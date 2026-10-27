@@ -470,6 +470,8 @@
     }
     nowPlaying.classList.add('on'); bPanel.style.bottom = '196px';
     if (TV.alarmAck) TV.alarmAck(); // 웹이 소리를 맡았으니 기본 알람음은 쓰지 않는다
+    // 노래가 먼저 불러지도록 3초 뒤에, 노래가 나오는 동안 브리핑을 만들어 둔다 (음성 엔진도 미리 깨운다)
+    setTimeout(() => { if (ringing) { prepareBriefing(true); TV.speak(''); } }, 3000);
     clearTimeout(ringTimer);
     ringTimer = setTimeout(() => { if (ringing) stopRing(); }, 15 * 60000);
   }
@@ -550,11 +552,19 @@
     return { stop() { alive = false; ctx.close(); } };
   }
 
-  async function startBriefing() {
-    TV.stopSpeak();
-    document.getElementById('b-tag').textContent = 'MORNING BRIEFING';
-    const st = document.getElementById('b-status'), body = document.getElementById('b-body');
-    st.innerHTML = 'PREPARING' + WAVE; body.textContent = '';
+  /**
+   * 브리핑 글(날씨·할 일·뉴스 요약)은 미리 만들어 30분 동안 다시 쓴다.
+   * 알람 노래가 나오는 동안 만들어 두면 버튼을 누르자마자 읽는다 ('다시 듣기'도 바로 읽는다).
+   */
+  let briefPrep = null, briefSeq = 0;
+  function prepareBriefing(fresh) {
+    if (!fresh && briefPrep && Date.now() - briefPrep.at < 30 * 60000) return briefPrep.p;
+    const p = buildBriefing();
+    briefPrep = { at: Date.now(), p };
+    p.catch(() => { if (briefPrep && briefPrep.p === p) briefPrep = null; });
+    return p;
+  }
+  async function buildBriefing() {
     const now = new Date();
     let text = '좋은 아침이에요. 오늘은 ' + (now.getMonth() + 1) + '월 ' + now.getDate() + '일 ' + '일월화수목금토'[now.getDay()] + '요일입니다.\n\n';
     if (!weather) await loadWeather();
@@ -562,7 +572,17 @@
       weather.hi + '도, 최저 ' + weather.lo + '도, 비 올 확률은 ' + weather.rain + '퍼센트예요.\n\n';
     const todos = todayReminders();
     if (todos.length) text += '오늘 할 일은 ' + todos.map((r) => (r.time ? spokenTime(r.time) + ' ' : '') + r.text).join(', ') + '입니다.\n\n';
-    text += await newsBriefing();
+    return text + await newsBriefing();
+  }
+  async function startBriefing() {
+    TV.stopSpeak();
+    const my = ++briefSeq;
+    document.getElementById('b-tag').textContent = 'MORNING BRIEFING';
+    const st = document.getElementById('b-status'), body = document.getElementById('b-body');
+    st.innerHTML = 'PREPARING' + WAVE; body.textContent = '';
+    let text;
+    try { text = await prepareBriefing(); } catch (e) { text = '브리핑을 준비하지 못했어요. 잠시 뒤 다시 들어 주세요.'; }
+    if (my !== briefSeq || current !== 'brief') return; // 준비하는 사이 다른 화면으로 갔거나 다시 눌렀으면 읽지 않는다
     st.textContent = 'TODAY'; body.textContent = text; TV.speak(text); followText(text);
   }
   function spokenTime(t) {
