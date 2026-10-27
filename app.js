@@ -484,7 +484,7 @@
       setTimeout(() => reject(new Error('timeout')), 8000);
     });
   }
-  const DEBUG = /debug/.test(location.search) || localStorage.getItem('tvdebug') === '1';
+  const DEBUG = /debug/.test(location.search) || info.platform === 'tv'; // 진단 중: TV 본체에서만 표시
   function dbg(m) { if (DEBUG && TV.toast) TV.toast('[유튜브] ' + m); }
   function playSong(id) {
     loadYT().then((YT) => {
