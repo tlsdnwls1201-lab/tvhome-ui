@@ -744,8 +744,9 @@
   try { const pe = TV.takeEvent && TV.takeEvent(); if (pe) setTimeout(() => window.onTvEvent(JSON.parse(pe)), 300); } catch (e) { /* 무시 */ }
   // 새 화면 버전을 처음 띄울 때 한 번, 앱 버전을 원격 점검 기록에 남긴다 (새 앱이 깔렸는지 확인용)
   try {
-    if (window.UI_VERSION && localStorage.getItem('reportedUi') !== window.UI_VERSION) {
-      localStorage.setItem('reportedUi', window.UI_VERSION);
+    const mark = window.UI_VERSION + '/' + info.shell;
+    if (TV.report && window.UI_VERSION && localStorage.getItem('reportedUi') !== mark) {
+      localStorage.setItem('reportedUi', mark);
       report({ kind: 'start', shell: info.shell, platform: info.platform, ytTv: !!TV.ytOpen });
     }
   } catch (e) { /* 무시 */ }
