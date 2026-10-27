@@ -137,7 +137,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); c
 .sched .ss { color: var(--sub); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sched.today .sd, .sched.today .st { color: #fff; font-weight: 600; }
 
-/* 할 일 알림 */
+/* (할 일 시각 알림은 쓰지 않음) */
 .reminder { left: 50%; top: 50%; width: 520px; transform: translate(-50%, -50%) scale(.96); padding: 26px 30px; opacity: 0;
   pointer-events: none; transition: all .25s; z-index: 40; border-color: rgba(234, 240, 255, .5);
   box-shadow: 0 0 40px rgba(80, 125, 220, .45), 0 30px 60px rgba(0, 0, 0, .6); }

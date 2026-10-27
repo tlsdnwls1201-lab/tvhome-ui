@@ -566,24 +566,10 @@
     show('alarm', alSync);
   }
 
-  /** 할 일 시각이 되면 TV에 띄우고 읽어 준다. */
-  const remOverlay = h('div', { class: 'card reminder' });
-  stage.appendChild(remOverlay);
-  let remTimer;
-  function showReminder(r) {
-    remOverlay.innerHTML = '<div class="label">Reminder · ' + esc(r.time || '') + '</div><div class="rem-text">' + esc(r.text) + '</div>' +
-      '<div class="label" style="margin-top:14px;letter-spacing:.14em">아무 버튼이나 누르면 닫혀요</div>';
-    remOverlay.classList.add('on');
-    TV.speak('알림이에요. ' + r.text);
-    clearTimeout(remTimer); remTimer = setTimeout(hideReminder, 90000);
-  }
-  function hideReminder() { remOverlay.classList.remove('on'); }
-
   // ---------- 리모컨 키 ----------
   addEventListener('keydown', (ev) => {
     const k = ev.key;
     if (current === 'brief' && ringing) { ev.preventDefault(); stopRing(); return; }
-    if (remOverlay.classList.contains('on')) { ev.preventDefault(); hideReminder(); TV.stopSpeak(); return; }
     const dir = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[k];
     if (dir) { ev.preventDefault(); move(dir); return; }
     if (k === 'Enter' || k === ' ') { ev.preventDefault(); if (focused) focused.click(); return; }
@@ -603,7 +589,7 @@
   window.onTvAlarm = function () { openBriefing(true); return true; };   // 예전 셸 호환
   window.onTvEvent = function (ev) {
     if (ev && ev.type === 'alarm') { loadData(); openBriefing(true); return true; }
-    if (ev && ev.type === 'reminder') { showReminder(ev); return true; }
+    if (ev && ev.type === 'reminder') return true; // 할 일은 아침 브리핑에서만 알린다
     return false;
   };
   window.onTvResume = function () { loadWeather(); loadData(); syncData(); checkVersion(); };
