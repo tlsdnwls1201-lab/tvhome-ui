@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>우리집 홈</title>
+<style>html,body{margin:0;height:100%;background:#04060b}</style>
+</head>
+<body>
+<script>
+// 항상 최신 화면을 받도록 version.json을 캐시 없이 읽고, 그 버전으로 CSS·JS를 불러온다
+(function () {
+  function load(v) {
+    window.UI_VERSION = v;
+    var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'app.css?v=' + v; document.head.appendChild(l);
+    var s = document.createElement('script'); s.src = 'app.js?v=' + v; document.body.appendChild(s);
+  }
+  fetch('version.json?t=' + Date.now(), { cache: 'no-store' })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { load(j.version || 'dev'); })
+    .catch(function () { load('offline'); });
+})();
+</script>
+</body>
+</html>
