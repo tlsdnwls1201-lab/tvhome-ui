@@ -484,7 +484,7 @@
       setTimeout(() => reject(new Error('timeout')), 8000);
     });
   }
-  const DEBUG = /debug/.test(location.search) || info.platform === 'tv'; // 진단 중: TV 본체에서만 표시
+  const DEBUG = /debug/.test(location.search);
   function dbg(m) { if (DEBUG && TV.toast) TV.toast('[유튜브] ' + m); }
   function playSong(id) {
     loadYT().then((YT) => {
@@ -494,13 +494,13 @@
         events: {
           onReady: (e) => { dbg('준비됨'); e.target.unMute(); e.target.setVolume(100); e.target.playVideo(); },
           onStateChange: (e) => dbg('상태 ' + e.data),
-          onError: (e) => { dbg('오류 ' + e.data); songInYouTubeApp(); },
+          onError: (e) => { dbg('오류 ' + e.data); fallbackChime('노래를 재생할 수 없어 기본 알람음으로 깨워요'); },
         } });
       clearTimeout(ytCheck);
       ytCheck = setTimeout(() => {
-        if (ringing && (!ytPlayer || !ytPlayer.getPlayerState || ytPlayer.getPlayerState() !== 1)) songInYouTubeApp();
-      }, 8000);
-    }).catch(() => songInYouTubeApp());
+        if (ringing && (!ytPlayer || !ytPlayer.getPlayerState || ytPlayer.getPlayerState() !== 1)) fallbackChime('노래를 재생할 수 없어 기본 알람음으로 깨워요');
+      }, 12000);
+    }).catch(() => fallbackChime('노래를 불러오지 못해 기본 알람음으로 깨워요'));
   }
   /** 웹 플레이어가 막히면 TV의 유튜브 앱으로 튼다. '이전'으로 돌아오면 브리핑을 시작한다. */
   function songInYouTubeApp() {
