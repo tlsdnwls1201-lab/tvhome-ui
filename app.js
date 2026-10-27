@@ -461,20 +461,55 @@
     document.getElementById('b-body').textContent = '좋은 아침이에요! 아무 버튼이나 누르면 노래가 멈추고 브리핑을 시작해요.';
     const song = songFor(dayCfg(new Date())), id = ytId(song.url);
     if (id) {
-      nowPlaying.innerHTML = '<iframe allow="autoplay; encrypted-media" frameborder="0" src="https://www.youtube.com/embed/' + id +
-        '?autoplay=1&loop=1&playlist=' + id + '&controls=0&modestbranding=1&rel=0&playsinline=1"></iframe>' +
+      nowPlaying.innerHTML = '<div id="yt"></div>' +
         '<div class="np"><div class="label">Now playing</div><div class="np-title">' + esc(song.title || '오늘의 노래') + '</div>' + WAVE + '</div>';
+      playSong(id);
     } else {
-      nowPlaying.innerHTML = '<div class="np" style="left:24px"><div class="label">Alarm</div><div class="np-title">기본 알람음</div>' + WAVE + '</div>';
-      chime = playChime();
+      fallbackChime();
     }
     nowPlaying.classList.add('on'); bPanel.style.bottom = '196px';
     if (TV.alarmAck) TV.alarmAck(); // 웹이 소리를 맡았으니 기본 알람음은 쓰지 않는다
     clearTimeout(ringTimer);
     ringTimer = setTimeout(() => { if (ringing) stopRing(); }, 15 * 60000);
   }
+  /** 유튜브 공식 플레이어로 틀고, 8초 안에 재생이 안 되면(삭제·임베드 금지·지난 라이브 등) 기본 알람음으로 바꾼다. */
+  let ytPlayer = null, ytCheck = null;
+  function loadYT() {
+    return new Promise((resolve, reject) => {
+      if (window.YT && window.YT.Player) return resolve(window.YT);
+      window.onYouTubeIframeAPIReady = () => resolve(window.YT);
+      const sc = document.createElement('script'); sc.src = 'https://www.youtube.com/iframe_api'; sc.onerror = reject;
+      document.head.appendChild(sc);
+      setTimeout(() => reject(new Error('timeout')), 8000);
+    });
+  }
+  function playSong(id) {
+    loadYT().then((YT) => {
+      if (!ringing) return;
+      ytPlayer = new YT.Player('yt', { videoId: id, width: 216, height: 122,
+        playerVars: { autoplay: 1, controls: 0, loop: 1, playlist: id, rel: 0, modestbranding: 1, playsinline: 1 },
+        events: {
+          onReady: (e) => { e.target.unMute(); e.target.setVolume(100); e.target.playVideo(); },
+          onError: () => fallbackChime('노래를 재생할 수 없어 기본 알람음으로 깨워요'),
+        } });
+      clearTimeout(ytCheck);
+      ytCheck = setTimeout(() => {
+        if (ringing && (!ytPlayer || !ytPlayer.getPlayerState || ytPlayer.getPlayerState() !== 1)) fallbackChime('노래를 재생할 수 없어 기본 알람음으로 깨워요');
+      }, 8000);
+    }).catch(() => fallbackChime('노래를 불러오지 못해 기본 알람음으로 깨워요'));
+  }
+  function fallbackChime(msg) {
+    if (!ringing || chime) return;
+    if (ytPlayer && ytPlayer.destroy) { try { ytPlayer.destroy(); } catch (e) { /* 무시 */ } }
+    ytPlayer = null;
+    nowPlaying.innerHTML = '<div class="np" style="left:24px"><div class="label">Alarm</div><div class="np-title">' + (msg || '기본 알람음') + '</div>' + WAVE + '</div>';
+    chime = playChime();
+  }
+
   function stopRing() {
-    ringing = false; clearTimeout(ringTimer);
+    ringing = false; clearTimeout(ringTimer); clearTimeout(ytCheck);
+    if (ytPlayer && ytPlayer.destroy) { try { ytPlayer.destroy(); } catch (e) { /* 무시 */ } }
+    ytPlayer = null;
     nowPlaying.classList.remove('on'); nowPlaying.innerHTML = ''; bPanel.style.bottom = '';
     if (chime) { chime.stop(); chime = null; }
     TV.stopAlarmSound(); if (TV.releaseWake) TV.releaseWake();
