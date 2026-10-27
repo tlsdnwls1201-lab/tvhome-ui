@@ -546,8 +546,12 @@
   }
   function closeYtTv() { if (ytTvOn) { ytTvOn = false; TV.ytClose(); } }
   /** 원격 점검 기록 (비공개 데이터 저장소의 diag.json). */
+  let reportChain = Promise.resolve();
   function report(o) {
-    try { if (TV.report) TV.report(JSON.stringify(Object.assign({ at: new Date().toString(), ui: window.UI_VERSION }, o), null, 1)); } catch (e) { /* 무시 */ }
+    if (!TV.report) return;
+    const text = JSON.stringify(Object.assign({ at: new Date().toString(), ui: window.UI_VERSION }, o), null, 1);
+    // 같은 파일을 덮어쓰므로 잇따른 기록이 서로 부딪치지 않게 6초 간격으로 차례로 보낸다 (지난 기록은 저장소 이력에 남는다)
+    reportChain = reportChain.then(() => { try { TV.report(text); } catch (e) { /* 무시 */ } return new Promise((r) => setTimeout(r, 6000)); });
   }
 
   /** 웹 플레이어가 막히면 TV의 유튜브 앱으로 튼다. '이전'으로 돌아오면 브리핑을 시작한다. */
