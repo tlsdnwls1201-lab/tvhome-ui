@@ -641,8 +641,13 @@
   };
   window.onTvMic = function () { openAsk(true); };
   window.onTvAlarm = function () { openBriefing(true); return true; };   // 예전 셸 호환
+  let lastAlarm = 0;
   window.onTvEvent = function (ev) {
-    if (ev && ev.type === 'alarm') { loadData(); openBriefing(true); return true; }
+    if (ev && ev.type === 'alarm') {
+      // 클라우드 링크와 앱 예약 알람이 잇따라 와도 한 번만 울린다 (이미 브리핑 중이면 노래를 다시 틀지 않게)
+      if (Date.now() - lastAlarm < 3 * 60000) return true;
+      lastAlarm = Date.now(); loadData(); openBriefing(true); return true;
+    }
     if (ev && ev.type === 'reminder') return true; // 할 일은 아침 브리핑에서만 알린다
     return false;
   };
