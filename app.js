@@ -133,6 +133,32 @@
       if (score < bestScore) { bestScore = score; best = e; }
     }
     if (best) setFocus(best);
+    else if (dir === 'up' || dir === 'down') scrollPanel(dir === 'down' ? 1 : -1);
+  }
+
+  /** 긴 답변·브리핑 글: 위·아래 키로 스크롤. */
+  function scrollPanel(d) {
+    const box = screens[current].querySelector('.panel .scroll');
+    if (!box) return;
+    const inner = box.firstElementChild, max = Math.max(0, inner.scrollHeight - box.clientHeight);
+    const y = Math.max(0, Math.min(max, (inner._y || 0) + d * 90));
+    inner._y = y; inner.style.transform = 'translateY(' + -y + 'px)';
+  }
+  /** 읽어 주는 동안 글이 천천히 따라 내려가게 (대략 한국어 초당 7글자). */
+  let follow;
+  function followText(text) {
+    clearInterval(follow);
+    const box = screens[current].querySelector('.panel .scroll');
+    if (!box) return;
+    const inner = box.firstElementChild; inner._y = 0; inner.style.transform = '';
+    const max = Math.max(0, inner.scrollHeight - box.clientHeight);
+    if (!max) return;
+    const secs = text.length / 7, step = max / (secs * 2);
+    follow = setInterval(() => {
+      inner._y = Math.min(max, (inner._y || 0) + step);
+      inner.style.transform = 'translateY(' + -inner._y + 'px)';
+      if (inner._y >= max) clearInterval(follow);
+    }, 500);
   }
 
   // ---------- 홈 ----------
@@ -320,7 +346,7 @@
   const ask = screen('ask');
   ask.appendChild(h('div', { class: 'page-title' }, '<small>AI ASSIST · GEMINI</small>무엇이든 물어보세요'));
   const askPanel = h('div', { class: 'card panel' },
-    '<div class="status" id="q-status"></div><div class="qa-q" id="q-q" style="margin-top:14px"></div><div class="qa-a" id="q-a"></div>');
+    '<div class="scroll"><div><div class="status" id="q-status"></div><div class="qa-q" id="q-q" style="margin-top:14px"></div><div class="qa-a" id="q-a"></div></div></div>');
   ask.appendChild(askPanel);
   const askMic = focusable(h('div', { class: 'mic', style: { left: '860px', top: '24px', width: '56px', height: '56px' }, on: () => listen() }, svg('mic')));
   ask.appendChild(askMic);
@@ -340,7 +366,7 @@
     qQ().textContent = 'Q. ' + q; qStatus().innerHTML = 'THINKING' + WAVE;
     try {
       const a = await call('ask', PERSONA, await withContext(q));
-      qStatus().textContent = 'ANSWER'; qA().textContent = a; TV.speak(a);
+      qStatus().textContent = 'ANSWER'; qA().textContent = a; TV.speak(a); followText(a);
     } catch (e) {
       qStatus().textContent = 'ERROR'; qA().textContent = '답을 가져오지 못했어요\n' + e.message;
     }
@@ -367,7 +393,7 @@
   brief.appendChild(bClock);
   let bTime = null;
   const bPanel = h('div', { class: 'card panel', style: { top: '150px' } },
-    '<div class="status" id="b-status"></div><div class="qa-a" id="b-body" style="margin-top:12px;font-size:17px"></div>');
+    '<div class="scroll"><div><div class="status" id="b-status"></div><div class="qa-a" id="b-body" style="margin-top:12px;font-size:16px"></div></div></div>');
   brief.appendChild(bPanel);
   const bOk = focusable(h('div', { class: 'pill', style: px(110, 104, 150, 34), on: () => startBriefing() }, '다시 듣기'));
   brief.appendChild(bOk);
@@ -402,7 +428,7 @@
     if (weather) text += CITY + ' 날씨는 지금 ' + weather.label + ', 기온 ' + weather.t + '도, 체감 ' + weather.feel + '도입니다. 오늘 최고 ' +
       weather.hi + '도, 최저 ' + weather.lo + '도, 비 올 확률은 ' + weather.rain + '퍼센트예요.\n\n';
     text += await newsBriefing();
-    st.textContent = 'TODAY'; body.textContent = text; TV.speak(text);
+    st.textContent = 'TODAY'; body.textContent = text; TV.speak(text); followText(text);
   }
   async function newsBriefing() {
     let hs;
@@ -475,7 +501,7 @@
   // 셸이 부르는 함수들
   window.onTvBack = function () {
     if (current === 'home') return false;
-    TV.stopSpeak();
+    TV.stopSpeak(); clearInterval(follow);
     if (ringing) { ringing = false; TV.stopAlarmSound(); }
     show('home', firstChannel);
     return true;
