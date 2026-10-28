@@ -860,19 +860,21 @@
 
   // ---------- TV 본체: 이 화면이 앞에 나오면 지니TV 입력으로 ----------
   // 본체가 깨어날 때 지니TV 입력을 보여 주는 앱(Live TV)이 곧바로 멈춰 이 화면이 앞에 나온다 (그러면 지니TV 알람이 안 들린다).
-  // 이 집은 지니TV만 보므로, 본체에서 이 화면이 앞에 나오면 3초 뒤 지니TV 입력(HDMI 3)을 다시 연다.
-  // 그사이 본체 리모컨 버튼을 누르면 그대로 두고, 입력 앱이 계속 멈추면 2분에 3번까지만 연다.
+  // 이 집은 지니TV만 보므로, 본체에서 이 화면이 앞에 나오면 몇 초 뒤 지니TV 입력(HDMI 3)을 다시 연다.
+  // 깨어난 직후에는 본체의 HDMI 입력이 10초 넘게 준비되지 않아 입력 앱이 또 멈추므로, 간격을 늘려 가며 2분에 8번까지 연다.
+  // 그사이 본체 리모컨 버튼을 누르면 그대로 둔다.
   const GENIE_INPUT = 'content://android.media.tv/passthrough/com.realtek.tv.passthrough%2F.hdmiinput.HDMITvInputService%2FHDMI300004';
+  const GENIE_WAITS = [3, 3, 4, 5, 6, 8, 10, 12]; // 초
   let toGenie = null, genieTries = [];
   function backToGenie() {
     if (info.platform !== 'tv' || !TV.openUrl) return;
     clearTimeout(toGenie);
+    genieTries = genieTries.filter((t) => Date.now() - t < 2 * 60000);
+    if (genieTries.length >= GENIE_WAITS.length) return;
     toGenie = setTimeout(() => {
-      genieTries = genieTries.filter((t) => Date.now() - t < 2 * 60000);
-      if (genieTries.length >= 3) return;
       genieTries.push(Date.now());
       TV.openUrl(GENIE_INPUT);
-    }, 3000);
+    }, GENIE_WAITS[genieTries.length] * 1000);
   }
   document.addEventListener('keydown', () => clearTimeout(toGenie), true);
 
