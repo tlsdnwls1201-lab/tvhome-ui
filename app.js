@@ -497,73 +497,93 @@
   function playSong(id) {
     loadYT().then((YT) => {
       if (!ringing) return;
+      const t0 = Date.now();
       ytPlayer = new YT.Player('yt', { videoId: id, width: 216, height: 122,
         playerVars: { autoplay: 1, controls: 0, loop: 1, playlist: id, rel: 0, modestbranding: 1, playsinline: 1 },
         events: {
           onReady: (e) => { dbg('준비됨'); e.target.unMute(); e.target.setVolume(100); e.target.playVideo(); },
-          onStateChange: (e) => { dbg('상태 ' + e.data); if (e.data === 1) soundOk(); },
+          onStateChange: (e) => {
+            dbg('상태 ' + e.data);
+            if (e.data !== 1) return;
+            if (!acked) report({ kind: 'alarm-iframe', song: id, state: 1, sec: Math.round((Date.now() - t0) / 1000) });
+            soundOk();
+          },
           onError: (e) => { dbg('오류 ' + e.data); fallbackChime('노래를 재생할 수 없어 기본 알람음으로 깨워요'); },
         } });
+      // 광고가 먼저 나오는 동안은 '시작 전'(-1)으로 보인다: 광고가 끝나고 노래가 나올 때까지 45초는 기다린다
+      const check = () => {
+        if (!ringing || !ytPlayer) return;
+        const state = ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : null;
+        if (state === 1) return;
+        if (Date.now() - t0 < 45000) { ytCheck = setTimeout(check, 5000); return; }
+        report({ kind: 'alarm-iframe', song: id, state });
+        fallbackChime('노래를 재생할 수 없어 기본 알람음으로 깨워요');
+      };
       clearTimeout(ytCheck);
-      ytCheck = setTimeout(() => {
-        const state = ytPlayer && ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : null;
-        if (ringing) report({ kind: 'alarm-iframe', song: id, state });
-        if (ringing && state !== 1) fallbackChime('노래를 재생할 수 없어 기본 알람음으로 깨워요');
-      }, 12000);
+      ytCheck = setTimeout(check, 12000);
     }).catch(() => fallbackChime('노래를 불러오지 못해 기본 알람음으로 깨워요'));
   }
   /**
    * 앱 안의 유튜브 TV 화면으로 튼다: '유튜브 연결'로 프리미엄 계정에 로그인해 두면 광고가 없다.
-   * 한동안 안 쓰다 링크로 틀면 유튜브가 "이 동영상을 재생하시겠어요?"라고 묻는다 → '예'를 눌러 준다 (방법을 바꿔 가며 3번까지).
-   * 24초 안에 재생이 안 되면 공개 플레이어(광고가 나올 수 있음) → 기본 알람음 순으로 바꾼다.
+   * 한동안 안 쓰다 링크로 틀면 유튜브가 먼저 묻는다: 계정 고르기 화면이면 프리미엄 계정을,
+   * "이 동영상을 재생하시겠어요?"면 '예'를 눌러 준다 (방법을 바꿔 가며 3번까지).
+   * 계정을 고르면 유튜브 첫 화면으로 가서 노래 주소가 사라지므로 다시 노래로 간다.
+   * 30초 안에 재생이 안 되면 공개 플레이어(광고가 나올 수 있음) → 기본 알람음 순으로 바꾼다.
    */
   const YT_TV = 'https://www.youtube.com/tv';
   const YT_UA = ''; // 비우면 앱 기본값(TV 브라우저). 유튜브가 TV 화면을 안 주면 여기만 바꿔 다시 올린다
-  let ytTvOn = false;
+  let ytTvOn = false, ytOpenAt = null;
+  function openYtTv(id) {
+    const r = document.getElementById('yt').getBoundingClientRect();
+    ytOpenAt = [r.left / innerWidth, r.top / innerHeight, r.width / innerWidth, r.height / innerHeight];
+    TV.ytOpen(YT_TV + '#/watch?v=' + id, YT_UA, ...ytOpenAt, false);
+    ytTvOn = true;
+  }
   function playSongTv(id) {
-    setTimeout(() => { // 노래 칸이 펼쳐진 뒤 자리를 잰다
-      if (!ringing) return;
-      const r = document.getElementById('yt').getBoundingClientRect();
-      TV.ytOpen(YT_TV + '#/watch?v=' + id, YT_UA, r.left / innerWidth, r.top / innerHeight, r.width / innerWidth, r.height / innerHeight, false);
-      ytTvOn = true;
-    }, 400);
-    const t0 = Date.now(), steps = [];
+    setTimeout(() => { if (ringing) openYtTv(id); }, 400); // 노래 칸이 펼쳐진 뒤 자리를 잰다
+    const t0 = Date.now(), steps = [], tries = { yes: 0, who: 0, go: 0 };
     clearTimeout(ytCheck);
     const check = async () => {
       if (!ringing || !ytTvOn) return;
       const st = await ytTvState();
       if (!ringing || !ytTvOn) return;
       const sec = Math.round((Date.now() - t0) / 1000);
-      if (st.playing) {
-        soundOk();
-        report(Object.assign({ kind: 'alarm-youtube-tv', song: id, sec, steps }, st));
+      const done = () => report(Object.assign({ kind: 'alarm-youtube-tv', song: id, sec, steps }, st));
+      if (st.playing) { soundOk(); done(); return; }
+      const kind = st.ask ? 'yes' : st.who ? 'who' : null;
+      if (kind && tries[kind] < YT_WAYS.length) {
+        const way = YT_WAYS[tries[kind]++];
+        steps.push({ sec, kind, way, r: await pressYt(kind, way) });
+        ytCheck = setTimeout(check, 3000); // 누른 뒤 다음 화면이 뜰 시간을 준다
         return;
       }
-      if (st.ask && steps.length < YT_YES_WAYS.length) {
-        const way = YT_YES_WAYS[steps.length];
-        steps.push({ sec, way, r: await pressYtYes(way) });
-        ytCheck = setTimeout(check, 3000); // 누른 뒤 영상이 불러질 시간을 준다
+      if (!kind && st.url && !/watch/.test(st.url) && sec >= 5 && tries.go < 2) {
+        // 처음엔 주소만 바꿔 앱 안에서 이동하고, 그래도 안 되면 노래 주소로 다시 연다
+        if (tries.go++ === 0) steps.push({ sec, kind: 'go', r: await ytEvalJs("(function(){location.hash='#/watch?v=" + id + "';return location.href;})()") });
+        else { steps.push({ sec, kind: 'reopen' }); openYtTv(id); }
+        ytCheck = setTimeout(check, 3000);
         return;
       }
-      if (sec >= 24) {
-        report(Object.assign({ kind: 'alarm-youtube-tv', song: id, sec, steps }, st));
-        closeYtTv(); playSong(id);
-        return;
-      }
+      if (sec >= 30) { done(); closeYtTv(); playSong(id); return; }
       ytCheck = setTimeout(check, 1500);
     };
     ytCheck = setTimeout(check, 2500);
   }
-  // 유튜브 TV 화면에서 보이는 '예, 이 동영상을 재생하겠습니다' 버튼을 찾는 스크립트 (없으면 null)
-  const YT_FIND_YES = "function(){var yes=null,all=document.querySelectorAll('body *');for(var i=0;i<all.length;i++){" +
+  // 유튜브 TV 화면에서 누를 버튼을 찾는 스크립트 (없으면 null). 문서 순서상 마지막 일치 = 가장 안쪽 글자
+  const ytFinder = (page, label) => "function(){var tx=(document.body&&document.body.innerText)||'';if(!" + page + ".test(tx))return null;" +
+    "var hit=null,all=document.querySelectorAll('body *');for(var i=0;i<all.length;i++){" +
     "var e=all[i],r=e.getBoundingClientRect(),t=(e.innerText||'').replace(/\\s+/g,' ').trim();" +
-    "if(r.width>0&&r.height>0&&t.length<40&&/재생하겠습니다|Yes, play/i.test(t))yes=e;}" + // 문서 순서상 마지막 = 가장 안쪽
-    "return yes&&(yes.closest('[role=button],[tabindex],button')||yes);}";
-  const YT_YES_WAYS = ['click', 'enter', 'remote'];
-  /** '예'를 누른다: 클릭 → 확인(Enter) 키 → 리모컨 확인 키. 결과 설명(버튼 모양·포커스)을 돌려준다. */
-  async function pressYtYes(way) {
+    "if(r.width>0&&r.height>0&&t.length<40&&" + label + ".test(t))hit=e;}" +
+    "return hit&&(hit.closest('[role=button],[tabindex],button')||hit);}";
+  const YT_FIND = {
+    yes: ytFinder('/재생하시겠어요|Play this video/i', '/재생하겠습니다|Yes, play/i'), // "이 동영상을 재생하시겠어요?" → '예'
+    who: ytFinder('/게스트로 시청|Watch as guest/i', '/@\\S/'), // 계정 고르기 → 계정 이름(@…)이 있는 칸
+  };
+  const YT_WAYS = ['click', 'enter', 'remote'];
+  /** 버튼을 누른다: 클릭 → 확인(Enter) 키 → 리모컨 확인 키. 결과 설명(버튼 모양·포커스)을 돌려준다. */
+  async function pressYt(kind, way) {
     if (way === 'remote') { TV.ytKey('DPAD_CENTER'); return 'key'; }
-    const js = "(function(){var b=(" + YT_FIND_YES + ")();if(!b)return 'none';" +
+    return ytEvalJs("(function(){var b=(" + YT_FIND[kind] + ")();if(!b)return 'none';" +
       (way === 'click'
         ? "var r=b.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;" +
           "['pointerover','pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(n){" +
@@ -575,14 +595,16 @@
           "Object.defineProperty(k,'keyCode',{get:function(){return 13;}});Object.defineProperty(k,'which',{get:function(){return 13;}});" +
           "a.dispatchEvent(k);});") +
       "var d=document.activeElement;return b.tagName+'.'+String(b.className).slice(0,40)+' 포커스='+" +
-      "(d?d.tagName+'.'+String(d.className).slice(0,40):'-')+' '+b.outerHTML.slice(0,240);})()";
+      "(d?d.tagName+'.'+String(d.className).slice(0,40):'-')+' '+b.outerHTML.slice(0,240);})()");
+  }
+  async function ytEvalJs(js) {
     try { return JSON.parse(await call('ytEval', js)); } catch (e) { return 'error ' + (e && e.message); }
   }
-  /** 유튜브 TV 화면의 재생 상태 (영상 유무·재생 중·시간·재생 확인 창·화면 글자 일부: 광고 표시 확인용). */
+  /** 유튜브 TV 화면의 재생 상태 (영상 유무·재생 중·시간·확인 창·계정 고르기·화면 글자 일부: 광고 표시 확인용). */
   async function ytTvState() {
     const js = "(function(){var v=document.querySelector('video');return JSON.stringify({video:!!v," +
       "playing:!!(v&&!v.paused&&v.currentTime>0.3),t:v?Math.round(v.currentTime):0,dur:v?Math.round(v.duration||0):0," +
-      "ask:!!(" + YT_FIND_YES + ")(),url:location.href,title:document.title," +
+      "ask:!!(" + YT_FIND.yes + ")(),who:!!(" + YT_FIND.who + ")(),url:location.href,title:document.title," +
       "text:((document.body&&document.body.innerText)||'').replace(/\\s+/g,' ').slice(0,400)})})()";
     try {
       let r = JSON.parse(await call('ytEval', js));
@@ -695,6 +717,8 @@
     try { text = await prepareBriefing(); } catch (e) { text = '브리핑을 준비하지 못했어요. 잠시 뒤 다시 들어 주세요.'; }
     if (my !== briefSeq || current !== 'brief') return; // 준비하는 사이 다른 화면으로 갔거나 다시 눌렀으면 읽지 않는다
     st.textContent = 'TODAY'; body.textContent = text; TV.speak(text); followText(text);
+    // 음성 엔진이 실제로 읽는지 남긴다 (새 앱만 상태를 알려 준다)
+    if (TV.ttsState) setTimeout(() => report({ kind: 'tts', state: TV.ttsState() }), 5000);
   }
   function spokenTime(t) {
     const [hh, mm] = t.split(':').map(Number);
