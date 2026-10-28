@@ -454,7 +454,7 @@
 
   /** 알람: 오늘 요일의 노래(없으면 기본 노래)를 틀고, 아무 버튼이나 누르면 브리핑. */
   function wakeWithSong() {
-    ringing = true;
+    ringing = true; acked = false;
     TV.stopSpeak();
     document.getElementById('b-tag').textContent = 'ALARM';
     document.getElementById('b-status').innerHTML = 'WAKE UP' + WAVE;
@@ -469,11 +469,17 @@
       fallbackChime();
     }
     nowPlaying.classList.add('on'); bPanel.style.bottom = '196px';
-    if (TV.alarmAck) TV.alarmAck(); // 웹이 소리를 맡았으니 기본 알람음은 쓰지 않는다
     // 노래가 먼저 불러지도록 3초 뒤에, 노래가 나오는 동안 브리핑을 만들어 둔다 (음성 엔진도 미리 깨운다)
     setTimeout(() => { if (ringing) { prepareBriefing(true); TV.speak(''); } }, 3000);
     clearTimeout(ringTimer);
     ringTimer = setTimeout(() => { if (ringing) stopRing(); }, 15 * 60000);
+  }
+  /** 소리가 나는 게 확인되면 앱의 기본 알람음 예약(알람 20초 뒤)을 취소한다. 그 전에 노래가 막히면 앱이 대신 울린다. */
+  let acked = false;
+  function soundOk() {
+    if (acked) return;
+    acked = true;
+    if (TV.alarmAck) TV.alarmAck();
   }
   /** 유튜브 공식 플레이어로 틀고, 8초 안에 재생이 안 되면(삭제·임베드 금지·지난 라이브 등) 기본 알람음으로 바꾼다. */
   let ytPlayer = null, ytCheck = null, songInApp = false, songUrl = '';
@@ -495,19 +501,21 @@
         playerVars: { autoplay: 1, controls: 0, loop: 1, playlist: id, rel: 0, modestbranding: 1, playsinline: 1 },
         events: {
           onReady: (e) => { dbg('준비됨'); e.target.unMute(); e.target.setVolume(100); e.target.playVideo(); },
-          onStateChange: (e) => dbg('상태 ' + e.data),
+          onStateChange: (e) => { dbg('상태 ' + e.data); if (e.data === 1) soundOk(); },
           onError: (e) => { dbg('오류 ' + e.data); fallbackChime('노래를 재생할 수 없어 기본 알람음으로 깨워요'); },
         } });
       clearTimeout(ytCheck);
       ytCheck = setTimeout(() => {
-        if (ringing && (!ytPlayer || !ytPlayer.getPlayerState || ytPlayer.getPlayerState() !== 1)) fallbackChime('노래를 재생할 수 없어 기본 알람음으로 깨워요');
+        const state = ytPlayer && ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : null;
+        if (ringing) report({ kind: 'alarm-iframe', song: id, state });
+        if (ringing && state !== 1) fallbackChime('노래를 재생할 수 없어 기본 알람음으로 깨워요');
       }, 12000);
     }).catch(() => fallbackChime('노래를 불러오지 못해 기본 알람음으로 깨워요'));
   }
   /**
    * 앱 안의 유튜브 TV 화면으로 튼다: '유튜브 연결'로 프리미엄 계정에 로그인해 두면 광고가 없다.
-   * 9초 뒤 재생 중이 아니면 (계정 고르기 같은 첫 화면일 수 있어) 확인 키를 한 번 눌러 주고,
-   * 그래도 안 되면 공개 플레이어(광고가 나올 수 있음) → 기본 알람음 순으로 바꾼다.
+   * 한동안 안 쓰다 링크로 틀면 유튜브가 "이 동영상을 재생하시겠어요?"라고 묻는다 → '예'를 눌러 준다 (방법을 바꿔 가며 3번까지).
+   * 24초 안에 재생이 안 되면 공개 플레이어(광고가 나올 수 있음) → 기본 알람음 순으로 바꾼다.
    */
   const YT_TV = 'https://www.youtube.com/tv';
   const YT_UA = ''; // 비우면 앱 기본값(TV 브라우저). 유튜브가 TV 화면을 안 주면 여기만 바꿔 다시 올린다
@@ -519,25 +527,63 @@
       TV.ytOpen(YT_TV + '#/watch?v=' + id, YT_UA, r.left / innerWidth, r.top / innerHeight, r.width / innerWidth, r.height / innerHeight, false);
       ytTvOn = true;
     }, 400);
+    const t0 = Date.now(), steps = [];
     clearTimeout(ytCheck);
-    ytCheck = setTimeout(async () => {
+    const check = async () => {
       if (!ringing || !ytTvOn) return;
-      let st = await ytTvState();
-      if (!st.playing) {
-        TV.ytKey('DPAD_CENTER');
-        await new Promise((r) => setTimeout(r, 6000));
-        if (!ringing || !ytTvOn) return;
-        st = await ytTvState();
+      const st = await ytTvState();
+      if (!ringing || !ytTvOn) return;
+      const sec = Math.round((Date.now() - t0) / 1000);
+      if (st.playing) {
+        soundOk();
+        report(Object.assign({ kind: 'alarm-youtube-tv', song: id, sec, steps }, st));
+        return;
       }
-      report(Object.assign({ kind: 'alarm-youtube-tv', song: id }, st));
-      if (!st.playing) { closeYtTv(); playSong(id); }
-    }, 9000);
+      if (st.ask && steps.length < YT_YES_WAYS.length) {
+        const way = YT_YES_WAYS[steps.length];
+        steps.push({ sec, way, r: await pressYtYes(way) });
+        ytCheck = setTimeout(check, 3000); // 누른 뒤 영상이 불러질 시간을 준다
+        return;
+      }
+      if (sec >= 24) {
+        report(Object.assign({ kind: 'alarm-youtube-tv', song: id, sec, steps }, st));
+        closeYtTv(); playSong(id);
+        return;
+      }
+      ytCheck = setTimeout(check, 1500);
+    };
+    ytCheck = setTimeout(check, 2500);
   }
-  /** 유튜브 TV 화면의 재생 상태 (영상 유무·재생 중·시간·화면 글자 일부: 광고 표시 확인용). */
+  // 유튜브 TV 화면에서 보이는 '예, 이 동영상을 재생하겠습니다' 버튼을 찾는 스크립트 (없으면 null)
+  const YT_FIND_YES = "function(){var yes=null,all=document.querySelectorAll('body *');for(var i=0;i<all.length;i++){" +
+    "var e=all[i],r=e.getBoundingClientRect(),t=(e.innerText||'').replace(/\\s+/g,' ').trim();" +
+    "if(r.width>0&&r.height>0&&t.length<40&&/재생하겠습니다|Yes, play/i.test(t))yes=e;}" + // 문서 순서상 마지막 = 가장 안쪽
+    "return yes&&(yes.closest('[role=button],[tabindex],button')||yes);}";
+  const YT_YES_WAYS = ['click', 'enter', 'remote'];
+  /** '예'를 누른다: 클릭 → 확인(Enter) 키 → 리모컨 확인 키. 결과 설명(버튼 모양·포커스)을 돌려준다. */
+  async function pressYtYes(way) {
+    if (way === 'remote') { TV.ytKey('DPAD_CENTER'); return 'key'; }
+    const js = "(function(){var b=(" + YT_FIND_YES + ")();if(!b)return 'none';" +
+      (way === 'click'
+        ? "var r=b.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;" +
+          "['pointerover','pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(n){" +
+          "var E=n.indexOf('pointer')===0&&window.PointerEvent?PointerEvent:MouseEvent;" +
+          "b.dispatchEvent(new E(n,{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y,button:0," +
+          "buttons:/down/.test(n)?1:0,pointerType:'mouse',isPrimary:true}));});"
+        : "try{b.focus();}catch(e){}var a=document.activeElement||document.body;['keydown','keyup'].forEach(function(n){" +
+          "var k=new KeyboardEvent(n,{key:'Enter',code:'Enter',bubbles:true,cancelable:true});" +
+          "Object.defineProperty(k,'keyCode',{get:function(){return 13;}});Object.defineProperty(k,'which',{get:function(){return 13;}});" +
+          "a.dispatchEvent(k);});") +
+      "var d=document.activeElement;return b.tagName+'.'+String(b.className).slice(0,40)+' 포커스='+" +
+      "(d?d.tagName+'.'+String(d.className).slice(0,40):'-')+' '+b.outerHTML.slice(0,240);})()";
+    try { return JSON.parse(await call('ytEval', js)); } catch (e) { return 'error ' + (e && e.message); }
+  }
+  /** 유튜브 TV 화면의 재생 상태 (영상 유무·재생 중·시간·재생 확인 창·화면 글자 일부: 광고 표시 확인용). */
   async function ytTvState() {
     const js = "(function(){var v=document.querySelector('video');return JSON.stringify({video:!!v," +
       "playing:!!(v&&!v.paused&&v.currentTime>0.3),t:v?Math.round(v.currentTime):0,dur:v?Math.round(v.duration||0):0," +
-      "url:location.href,title:document.title,text:((document.body&&document.body.innerText)||'').replace(/\\s+/g,' ').slice(0,400)})})()";
+      "ask:!!(" + YT_FIND_YES + ")(),url:location.href,title:document.title," +
+      "text:((document.body&&document.body.innerText)||'').replace(/\\s+/g,' ').slice(0,400)})})()";
     try {
       let r = JSON.parse(await call('ytEval', js));
       if (typeof r === 'string') r = JSON.parse(r);
@@ -576,10 +622,16 @@
     ytPlayer = null;
     nowPlaying.innerHTML = '<div class="np" style="left:24px"><div class="label">Alarm</div><div class="np-title">' + (msg || '기본 알람음') + '</div>' + WAVE + '</div>';
     chime = playChime();
+    report({ kind: 'alarm-chime', msg: msg || '' });
+    // 알람음이 작거나 안 날 수도 있어 30초마다 말로도 깨운다 (앱의 기본 알람음도 함께 울린다)
+    const say = () => { if (ringing && chime) TV.speak('좋은 아침이에요. 일어날 시간이에요. 아무 버튼이나 누르면 아침 브리핑을 시작해요.'); };
+    say();
+    wakeVoice = setInterval(say, 30000);
   }
+  let wakeVoice = null;
 
   function stopRing() {
-    ringing = false; songInApp = false; clearTimeout(ringTimer); clearTimeout(ytCheck);
+    ringing = false; songInApp = false; clearTimeout(ringTimer); clearTimeout(ytCheck); clearInterval(wakeVoice);
     closeYtTv();
     if (ytPlayer && ytPlayer.destroy) { try { ytPlayer.destroy(); } catch (e) { /* 무시 */ } }
     ytPlayer = null;
@@ -801,8 +853,10 @@
       syncNow: (id) => cb(id, true, '{}'), alarmAck: () => {}, releaseWake: () => {}, openUrl: () => true,
       ytOpen: (url, ua, x, y, w, hh, inter) => { window.__ytMock = { url, x, y, w, h: hh, inter }; toast('(미리보기) 유튜브 TV ' + (inter ? '연결 화면' : '알람 노래')); },
       ytClose: () => { window.__ytMock = null; }, ytKey: () => {},
-      ytEval: (id) => cb(id, true, JSON.stringify(JSON.stringify({ video: true, playing: !!window.__ytMock, t: 9, dur: 228, text: '미리보기' })), 100),
-      report: (t) => { window.__report = t; },
+      // window.__ytAsk를 켜면 재생 확인 창 시험: 스크립트를 이 미리보기 화면에서 그대로 돌린다
+      ytEval: (id, js) => cb(id, true, JSON.stringify(window.__ytAsk ? (0, eval)(js)
+        : JSON.stringify({ video: true, playing: !!window.__ytMock, t: 9, dur: 228, text: '미리보기' })), 100),
+      report: (t) => { window.__report = t; (window.__reports = window.__reports || []).push(JSON.parse(t)); },
       getAlarm: () => JSON.stringify(Object.assign({}, alarmM, { next: alarmM.on ? next() : -1 })),
       setAlarm: (j) => { alarmM = Object.assign(alarmM, JSON.parse(j)); return JSON.stringify(Object.assign({}, alarmM, { next: alarmM.on ? next() : -1 })); },
     };
