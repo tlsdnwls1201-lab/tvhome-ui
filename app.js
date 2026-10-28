@@ -853,9 +853,28 @@
     return false;
   };
   window.onTvResume = function () {
+    backToGenie();
     if (ringing && songInApp) { stopRing(); return; } // 유튜브 앱에서 [이전]으로 돌아옴 → 브리핑
     loadWeather(); loadData(); syncData(); checkVersion();
   };
+
+  // ---------- TV 본체: 이 화면이 앞에 나오면 지니TV 입력으로 ----------
+  // 본체가 깨어날 때 지니TV 입력을 보여 주는 앱(Live TV)이 곧바로 멈춰 이 화면이 앞에 나온다 (그러면 지니TV 알람이 안 들린다).
+  // 이 집은 지니TV만 보므로, 본체에서 이 화면이 앞에 나오면 3초 뒤 지니TV 입력(HDMI 3)을 다시 연다.
+  // 그사이 본체 리모컨 버튼을 누르면 그대로 두고, 입력 앱이 계속 멈추면 2분에 3번까지만 연다.
+  const GENIE_INPUT = 'content://android.media.tv/passthrough/com.realtek.tv.passthrough%2F.hdmiinput.HDMITvInputService%2FHDMI300004';
+  let toGenie = null, genieTries = [];
+  function backToGenie() {
+    if (info.platform !== 'tv' || !TV.openUrl) return;
+    clearTimeout(toGenie);
+    toGenie = setTimeout(() => {
+      genieTries = genieTries.filter((t) => Date.now() - t < 2 * 60000);
+      if (genieTries.length >= 3) return;
+      genieTries.push(Date.now());
+      TV.openUrl(GENIE_INPUT);
+    }, 3000);
+  }
+  document.addEventListener('keydown', () => clearTimeout(toGenie), true);
 
   // 새 화면이 올라오면 다시 불러온다
   async function checkVersion() {
@@ -880,6 +899,7 @@
   loadWeather(); setInterval(loadWeather, 30 * 60000);
   loadData(); syncData(); setInterval(() => { refreshAlarm(); renderToday(); }, 60000); setInterval(syncData, 10 * 60000);
   setInterval(checkVersion, 3 * 60000);
+  backToGenie(); // 본체가 켜지며 이 화면을 처음 띄웠거나 새 화면으로 다시 불러왔을 때
 
   // ---------- 브라우저 미리보기용 가짜 TV ----------
   function mockTV() {
