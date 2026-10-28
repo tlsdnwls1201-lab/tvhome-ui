@@ -469,8 +469,8 @@
       fallbackChime();
     }
     nowPlaying.classList.add('on'); bPanel.style.bottom = '196px';
-    // 노래가 먼저 불러지도록 3초 뒤에, 노래가 나오는 동안 브리핑을 만들어 둔다 (음성 엔진도 미리 깨운다)
-    setTimeout(() => { if (ringing) { prepareBriefing(true); TV.speak(''); } }, 3000);
+    // 노래가 먼저 불러지도록 3초 뒤에, 노래가 나오는 동안 뉴스 요약을 만들어 둔다 (음성 엔진도 미리 깨운다)
+    setTimeout(() => { if (ringing) { prepareNews(true); TV.speak(''); } }, 3000);
     clearTimeout(ringTimer);
     ringTimer = setTimeout(() => { if (ringing) stopRing(); }, 15 * 60000);
   }
@@ -679,46 +679,71 @@
   }
 
   /**
-   * 브리핑 글(날씨·할 일·뉴스 요약)은 미리 만들어 30분 동안 다시 쓴다.
-   * 알람 노래가 나오는 동안 만들어 두면 버튼을 누르자마자 읽는다 ('다시 듣기'도 바로 읽는다).
+   * 브리핑: 인사·날짜·날씨·할 일은 누르자마자 읽고, 오래 걸리는 뉴스 요약(Gemini)은 그동안 마저 만들어 이어 읽는다.
+   * 뉴스 요약은 30분 동안 다시 쓰고, 알람 노래가 나오는 동안 미리 만들어 둔다 ('다시 듣기'도 바로 읽는다).
    */
-  let briefPrep = null, briefSeq = 0;
-  function prepareBriefing(fresh) {
-    if (!fresh && briefPrep && Date.now() - briefPrep.at < 30 * 60000) return briefPrep.p;
-    const p = buildBriefing();
-    briefPrep = { at: Date.now(), p };
-    p.catch(() => { if (briefPrep && briefPrep.p === p) briefPrep = null; });
+  let newsPrep = null, briefSeq = 0;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  function prepareNews(fresh) {
+    if (!fresh && newsPrep && Date.now() - newsPrep.at < 30 * 60000) return newsPrep.p;
+    const p = newsBriefing();
+    newsPrep = { at: Date.now(), p };
+    p.catch(() => { if (newsPrep && newsPrep.p === p) newsPrep = null; });
     return p;
   }
-  async function buildBriefing() {
+  async function briefIntro() {
     const now = new Date();
     let text = '좋은 아침이에요. 오늘은 ' + (now.getMonth() + 1) + '월 ' + now.getDate() + '일 ' + '일월화수목금토'[now.getDay()] + '요일입니다.\n\n';
-    if (!weather) await loadWeather();
+    if (!weather) await Promise.race([loadWeather(), sleep(3000)]); // 날씨가 늦으면 빼고 바로 시작한다
     if (weather) text += CITY + ' 날씨는 지금 ' + weather.label + ', 기온 ' + weather.t + '도, 체감 ' + weather.feel + '도입니다. 오늘 최고 ' +
       weather.hi + '도, 최저 ' + weather.lo + '도, 비 올 확률은 ' + weather.rain + '퍼센트예요.\n\n';
     const todos = todayReminders();
     if (todos.length) text += '오늘 할 일은 ' + todos.map((r) => (r.time ? spokenTime(r.time) + ' ' : '') + r.text).join(', ') + '입니다.\n\n';
-    text += await newsBriefing();
+    return text.trim();
+  }
+  /** 지금 읽는 글이 끝날 때까지 기다린다: 새 앱은 음성 엔진 상태로, 예전 앱은 글 길이로 어림한다 (1초에 7자쯤). */
+  async function speechDone(text, my) {
+    const est = 1500 + text.length * 150, t0 = Date.now();
+    if (!TV.ttsState) return sleep(est);
+    let seen = false, quiet = 0;
+    while (my === briefSeq && Date.now() - t0 < est + 15000) {
+      await sleep(400);
+      if (TV.ttsState() === '읽는 중') { seen = true; quiet = 0; } else if ((seen || Date.now() - t0 > 4000) && ++quiet >= 2) return;
+    }
+  }
+  async function startBriefing() {
+    TV.stopSpeak();
+    const my = ++briefSeq, t0 = Date.now();
+    const stale = () => my !== briefSeq || current !== 'brief'; // 준비하는 사이 다른 화면으로 갔거나 다시 눌렀으면 읽지 않는다
+    document.getElementById('b-tag').textContent = 'MORNING BRIEFING';
+    const st = document.getElementById('b-status'), body = document.getElementById('b-body');
+    st.innerHTML = 'PREPARING' + WAVE; body.textContent = '';
+    let news = null, newsSec = 0;
+    const newsReady = prepareNews().catch(() => '지금은 뉴스를 가져오지 못했어요.\n\n' + MOTTO)
+      .then((t) => { news = t; newsSec = Math.round((Date.now() - t0) / 1000); });
+    const intro = await briefIntro();
+    if (stale()) return;
+    const introSec = Math.round((Date.now() - t0) / 1000);
+    st.textContent = 'TODAY'; body.textContent = intro; TV.speak(intro); followText(intro);
+    await speechDone(intro, my);
+    if (stale()) return;
+    const waited = news === null;
+    if (waited) { // 뉴스가 아직이면 조용히 기다리지 않고 알려 준다
+      st.innerHTML = 'NEWS' + WAVE;
+      TV.speak('이어서 오늘의 뉴스를 정리하고 있어요. 잠시만 기다려 주세요.');
+      await newsReady;
+      if (stale()) return;
+    }
+    const text = intro + '\n\n' + news;
+    st.textContent = 'TODAY'; body.textContent = text; TV.speak(news); followText(text);
+    // 걸린 시간과 음성 엔진이 실제로 읽는지 남긴다 (음성 상태는 새 앱만 알려 준다)
+    setTimeout(() => report({ kind: 'briefing-time', introSec, newsSec, waited, tts: TV.ttsState ? TV.ttsState() : null }), 3000);
     try {
       if (TV.report && localStorage.getItem('reportedBrief') !== window.UI_VERSION) {
         localStorage.setItem('reportedBrief', window.UI_VERSION);
         report({ kind: 'briefing', text });
       }
     } catch (e) { /* 무시 */ }
-    return text;
-  }
-  async function startBriefing() {
-    TV.stopSpeak();
-    const my = ++briefSeq;
-    document.getElementById('b-tag').textContent = 'MORNING BRIEFING';
-    const st = document.getElementById('b-status'), body = document.getElementById('b-body');
-    st.innerHTML = 'PREPARING' + WAVE; body.textContent = '';
-    let text;
-    try { text = await prepareBriefing(); } catch (e) { text = '브리핑을 준비하지 못했어요. 잠시 뒤 다시 들어 주세요.'; }
-    if (my !== briefSeq || current !== 'brief') return; // 준비하는 사이 다른 화면으로 갔거나 다시 눌렀으면 읽지 않는다
-    st.textContent = 'TODAY'; body.textContent = text; TV.speak(text); followText(text);
-    // 음성 엔진이 실제로 읽는지 남긴다 (새 앱만 상태를 알려 준다)
-    if (TV.ttsState) setTimeout(() => report({ kind: 'tts', state: TV.ttsState() }), 5000);
   }
   function spokenTime(t) {
     const [hh, mm] = t.split(':').map(Number);
