@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>진동 시험</title>
+<style>
+  :root { --bg:#04060b; --line:rgba(191,208,255,.16); --txt:#f2f5fb; --sub:#8393b3; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0 auto; max-width:480px; padding:calc(18px + env(safe-area-inset-top)) 16px 40px; background:var(--bg); color:var(--txt);
+         font:15px -apple-system, "Apple SD Gothic Neo", sans-serif; }
+  h1 { font-size:20px; font-weight:400; margin:0 0 6px; }
+  p { color:var(--sub); font-size:13px; margin:0 0 18px; }
+  .t { border:1px solid var(--line); border-radius:16px; padding:14px; margin-bottom:12px; }
+  .t b { display:block; margin-bottom:10px; }
+  .t small { color:var(--sub); }
+  .btn { position:relative; display:block; width:100%; padding:16px 0; border-radius:14px; border:1px solid var(--line); overflow:hidden;
+         background:linear-gradient(145deg,#152a52,#0b1630); color:var(--txt); font:inherit; text-align:center; user-select:none; }
+  .btn:active { transform:scale(.97); }
+  /* C: 버튼 위에 진짜 스위치를 투명하게 덮는다 */
+  .cover-switch { position:absolute; left:0; top:0; width:100%; height:100%; margin:0; opacity:.011; }
+  /* D: 라벨이 버튼 전체이고, 안의 스위치는 보이게 두되 화면 밖으로 */
+  .cover-label { position:absolute; inset:0; }
+  .offscreen { position:absolute; left:-200px; top:0; }
+  /* E: 작고 거의 투명한 진짜 스위치를 대신 누른다 */
+  .tiny { position:fixed; right:0; bottom:0; opacity:.011; pointer-events:none; }
+</style>
+</head>
+<body>
+<h1>진동 시험</h1>
+<p>A부터 E까지 하나씩 눌러 보고, <b>진동이 오는 것</b>을 알려 주세요. 누를 때마다 옆 숫자가 올라가요.</p>
+
+<div class="t"><b>A. 지금 방식 (숨긴 스위치를 대신 누르기) <small id="nA">0</small></b>
+  <button class="btn" id="bA">A 누르기</button></div>
+
+<div class="t"><b>B. 진짜 스위치 (직접 켜고 끄기) <small id="nB">0</small></b>
+  <input type="checkbox" switch id="sB"></div>
+
+<div class="t"><b>C. 버튼 위에 투명한 스위치 <small id="nC">0</small></b>
+  <div class="btn">C 누르기<input type="checkbox" switch class="cover-switch" id="sC"></div></div>
+
+<div class="t"><b>D. 버튼 전체가 스위치 라벨 <small id="nD">0</small></b>
+  <div class="btn">D 누르기<label class="cover-label"><input type="checkbox" switch class="offscreen" id="sD"></label></div></div>
+
+<div class="t"><b>E. 작은 진짜 스위치를 대신 누르기 <small id="nE">0</small></b>
+  <button class="btn" id="bE">E 누르기</button></div>
+<input type="checkbox" switch class="tiny" id="sE">
+
+<script>
+const bump = (k) => { const el = document.getElementById('n' + k); el.textContent = +el.textContent + 1; };
+document.getElementById('bA').addEventListener('click', () => {
+  const l = document.createElement('label'), i = document.createElement('input');
+  l.ariaHidden = 'true'; l.style.display = 'none'; i.type = 'checkbox'; i.setAttribute('switch', '');
+  l.appendChild(i); document.head.appendChild(l); l.click(); l.remove(); bump('A');
+});
+document.getElementById('sB').addEventListener('change', () => bump('B'));
+document.getElementById('sC').addEventListener('change', () => bump('C'));
+document.getElementById('sD').addEventListener('change', () => bump('D'));
+document.getElementById('bE').addEventListener('click', () => { document.getElementById('sE').click(); bump('E'); });
+</script>
+</body>
+</html>
